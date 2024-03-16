@@ -1,5 +1,6 @@
 <?php
 use Swoole\Coroutine\Http\Client;
+use Swoole\Coroutine;
 class inc{
     private $apidomain;
     private $AppID;
@@ -50,7 +51,7 @@ class inc{
     
     public function startHeartbeat($client)
     {
-    echo "[Debug]TTL set".$this->ttl."\n";
+    mlog ("TTL set ".$this->ttl,1);
     $Timerid = Swoole\Timer::tick($this->ttl, function () use ($client) {
         if (empty($this->s)){
             $d = "null";
@@ -65,9 +66,9 @@ class inc{
             ]
         );
         $client->push($heartbeat);
-        echo "[".date('Y.n.j-H:i:s') ."]". "[Debug]SendHeartbeat {$d}\n";
+        mlog("SendHeartbeat {$d}",1);
     });
-    echo "[Debug]TimerStart ID:{$Timerid}\n";
+    mlog("HeartbeatTimerStart ID:{$Timerid}",1);
     }
 
     public function update_s($s,){
