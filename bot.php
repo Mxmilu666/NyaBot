@@ -18,7 +18,7 @@ $count = 0;//进行插件计数
 foreach (glob('./plugins/*.php') as $file) {
     $count++;
 }
-mlog("找到{$count}个插件:");
+mlog("找到{$count}个插件");
 mlog("正在连接WebSocket服务器");
 run(function (){
     include './inc/config.php';
