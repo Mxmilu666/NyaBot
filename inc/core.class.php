@@ -5,16 +5,20 @@ class inc{
     private $apidomain;
     private $AppID;
     private $token;
+    private $AppSecret;
+    private $accesstoken;
     private $op_data;
-    private $ttl;
+    private $wsttl;
+    private $tokenttl;
     private $client;
     private $s;
     private $op_message = [];
 
-    public function __construct($apidomain,$AppID,$token){
+    public function __construct($apidomain,$AppID,$token,$AppSecret){
         $this->apidomain = $apidomain;
         $this->AppID = $AppID;
         $this->token = $token;
+        $this->AppSecret = $AppSecret;
     }
 
     public function connect_ws()
@@ -40,7 +44,7 @@ class inc{
             $response = $client->recv();
             $responseData = json_decode($response->data, true);
             if (isset($responseData['op']) && $responseData['op'] === 10) {
-                $this->ttl = $responseData['d']['heartbeat_interval'];
+                $this->wsttl = $responseData['d']['heartbeat_interval'];
                 $this->startHeartbeat($client);
                 return $client;
             } else {
@@ -49,10 +53,53 @@ class inc{
         }
     }
     
+    public function getAccessToken()
+    {
+        $client = new Client('bots.qq.com',443,true);
+        $client->setHeaders([
+            'Content-Type' => 'application/json; charset=utf-8',
+        ]);
+        $sendjson = json_encode(
+            [
+                'appId' => $this->AppID,
+                'clientSecret' => $this->AppSecret
+            ]
+        );
+        $client->post('/app/getAppAccessToken',$sendjson);
+        $client->close();
+        $this->accesstoken = json_decode($client->body, true)['access_token'];
+        mlog ("GetNewAccesstoken:".$this->accesstoken,1);
+        $this->tokenttl = json_decode($client->body, true)['expires_in'];
+        $this->startAccessTokenTimer();
+    }
+
+    public function startAccessTokenTimer()
+    {
+    mlog ("TokenTTL set ".$this->tokenttl * 1000,1);
+    $Timerid = Swoole\Timer::tick($this->tokenttl * 1000, function () {
+        $client = new Client('bots.qq.com',443,true);
+        $client->setHeaders([
+            'Content-Type' => 'application/json; charset=utf-8',
+        ]);
+        $sendjson = json_encode(
+            [
+                'appId' => $this->AppID,
+                'clientSecret' => $this->AppSecret
+            ]
+        );
+        $client->post('/app/getAppAccessToken',$sendjson);
+        $client->close();
+        $this->accesstoken = json_decode($client->body, true)['access_token'];
+        $this->tokenttl = json_decode($client->body, true)['expires_in'];
+        mlog("GetNewAccesstoken {$this->accesstoken}",1);
+    });
+    mlog("AccessTokenTimerStart ID:{$Timerid}",1);
+    }
+
     public function startHeartbeat($client)
     {
-    mlog ("TTL set ".$this->ttl,1);
-    $Timerid = Swoole\Timer::tick($this->ttl, function () use ($client) {
+    mlog ("WsTTL set ".$this->wsttl,1);
+    $Timerid = Swoole\Timer::tick($this->wsttl, function () use ($client) {
         if (empty($this->s)){
             $d = "null";
         }
@@ -79,84 +126,25 @@ class inc{
         $this->op_message[$uid] = $op_data;
     }
 
-    //发送群聊信息
-    public function group_send_msg($group_id,$message){
-    $op_data=$this->op_message[swoole\Coroutine::getuid()];
-    $sendjson = json_encode(
-            [
-                'action' => 'send_group_msg',
-                'params' =>
-                    [
-                        'group_id' => $group_id,
-                        'message' =>  $message
-                    ]
-            ]
-        );
-    $this->op_data->push($sendjson);
-    echo '[' . date('Y.n.j-H:i:s') . ']' . '[' . $group_id . ']'. '发送群聊消息：' . $message . PHP_EOL;
-}
     //发送群聊回复信息
     public function group_send_reply($group_id,$message) {
     $op_data=$this->op_message[swoole\Coroutine::getuid()];
-    $sendjson = json_encode([
-        'action' => 'send_msg',
-        'params' => [
-            'group_id' => $group_id,
-            "message" => [
-            [
-                'type' => 'text',
-                'data' => [
-                    'text' => $message
-                ]
-            ] ,
-            [
-                'type' => 'reply',
-                'data' => array(
-                    'id' => $op_data['message_id'])
-            ] ]
-        ]
+    $client = new Client($this->apidomain,443,true);
+    $client->setHeaders([
+        'Authorization' => "QQBot {$this->accesstoken}",
+        'X-Union-Appid' => $this->AppID,
+        'Content-Type' => 'application/json; charset=utf-8',
     ]);
-        $this->op_data->push($sendjson);
-        echo '[' . date('Y.n.j-H:i:s') . ']' . '[' . $group_id . ']'. '发送群聊回复消息：' . $message . PHP_EOL;
-}
-    //发送私聊信息
-    public function private_send_msg($user_id,$message){
-    $op_data=$this->$this->op_message[swoole\Coroutine::getuid()];
     $sendjson = json_encode(
-            [
-                'action' => 'send_private_msg',
-                'params' =>
-                    [
-                        'user_id' => $user_id,
-                        'message' =>  $message
-                    ]
-            ]
-        );
-    $this->op_data->push($sendjson);
-    echo '[' . date('Y.n.j-H:i:s') . ']' . '[' . $user_id . ']'. '发送私聊消息：' . $message . PHP_EOL;
+        [
+            'content' => $message,
+            'msg_type' => 0,
+            'msg_id' => $op_data['d']['id'],
+            'msg_seq' => 1
+        ]
+    );
+    $client->post("/v2/groups/{$group_id}/messages",$sendjson);
+    $client->close();
+    mlog('['.$op_data['group_id'].']'.'发送群聊被动消息:'.$message);
 }
-    //发送私聊回复信息
-    public function private_send_reply($user_id,$message) {
-        $op_data=$this->$this->op_message[swoole\Coroutine::getuid()];
-        $sendjson = json_encode([
-            'action' => 'send_msg',
-            'params' => [
-                'user_id' => $user_id,
-                "message" => [
-                [
-                    'type' => 'text',
-                    'data' => [
-                        'text' => $message
-                    ]
-                ] ,
-                [
-                    'type' => 'reply',
-                    'data' => array(
-                        'id' => $op_data['message_id'])
-                ] ]
-            ]
-        ]);
-            $this->op_data->push($sendjson);
-            echo '[' . date('Y.n.j-H:i:s') . ']' . '[' . $user_id . ']'. '发送私聊回复消息：' . $message . PHP_EOL;
-    }
 }
